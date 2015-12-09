@@ -1,0 +1,22 @@
+set(CTEST_SOURCE_DIRECTORY "$ENV{CI_SOURCE_DIR}")
+set(CTEST_BINARY_DIRECTORY "$ENV{CI_BUILD_DIR}")
+set(FAILED_FILE "$ENV{CI_TEST_FAILED}")
+
+include(${CTEST_SOURCE_DIRECTORY}/CTestConfig.cmake)
+set(CTEST_SITE "CircleCI")
+set(CTEST_BUILD_NAME "Linux-$ENV{CIRCLE_BRANCH}-$ENV{CI_BUILD_NAME}-$ENV{CI_SHORT_HASH}")
+set(CTEST_CMAKE_GENERATOR "Unix Makefiles")
+
+ctest_start("Continuous")
+ctest_configure()
+ctest_build()
+ctest_test(PARALLEL_LEVEL 4 RETURN_VALUE res)
+ctest_coverage()
+file(REMOVE "${CTEST_BINARY_DIRECTORY}/coverage.xml")
+ctest_submit()
+
+file(REMOVE "${FAILED_FILE}")
+if(NOT res EQUAL 0)
+  file(WRITE "${FILED_FILE}" "error")
+  message(FATAL_ERROR "Test failures occurred.")
+endif()

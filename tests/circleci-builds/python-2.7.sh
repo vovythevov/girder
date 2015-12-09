@@ -1,0 +1,4 @@
+export CI_BUILD_NAME="python2.7"
+export CI_PYTHON_VERSION="2.7.10"
+export CI_MONGO_VERSION="2.6.11"
+export CI_PYTHON_COVERAGE="ON"

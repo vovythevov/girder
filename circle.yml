@@ -1,0 +1,18 @@
+dependencies:
+  cache_directories:
+    - "~/local"
+  override:
+    - sudo service mongodb stop
+    - echo 'source ~/girder/tests/circle.sh' >> ~/.circlerc
+    - girder_depends ~/girder/tests/circleci-builds/python-2.7.sh
+    - girder_depends ~/girder/tests/circleci-builds/python-3.4.sh
+
+test:
+  override:
+    - girder_test:
+        parallel: true
+        files: 
+          - tests/circleci-builds/python-2.7.sh
+          - tests/circleci-builds/python-3.4.sh
+
+
