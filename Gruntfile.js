@@ -73,6 +73,7 @@ module.exports = function (grunt) {
     grunt.loadNpmTasks('grunt-gitinfo');
     grunt.loadNpmTasks('grunt-file-creator');
     grunt.loadNpmTasks('grunt-npm-install');
+    grunt.loadNpmTasks('grunt-documentation');
 
     // This task should be run once manually at install time.
     grunt.registerTask('setup', 'Initial install/setup tasks', function () {

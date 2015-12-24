@@ -37,13 +37,14 @@
     "toposort": "~0.2"
   },
   "devDependencies": {
-    "argv" : "0.0.2",
-    "jshint": "2.5.5",
-    "comment-json" : "0.1.11",
-    "phantomjs": "1.9.18",
-    "phantomjs-polyfill": "0.0.1",
+    "argv": "0.0.2",
     "blanket": "1.1.6",
-    "jscs": "2.5.1"
+    "comment-json": "0.1.11",
+    "grunt-documentation": "~1.0.0",
+    "jscs": "2.5.1",
+    "jshint": "2.5.5",
+    "phantomjs": "1.9.18",
+    "phantomjs-polyfill": "0.0.1"
   },
   "scripts": {
     "postinstall": "grunt init && grunt"
