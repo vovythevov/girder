@@ -6,6 +6,9 @@
 /*
  * Initialize global girder object
  */
+/**
+ * @namespace
+ */
 var girder = girder || {};
 
 /*
@@ -17,10 +20,12 @@ if (!window.console) {
         error: function () {}
     };
 }
-
-_.extend(girder, {
+_.extend(girder, /** @lends girder */{
+    /** @namespace */
     models: {},
+    /** @namespace */
     collections: {},
+    /** @namespace */
     views: {},
     apiRoot: $('#g-global-info-apiroot').text().replace(
         '%HOST%', window.location.origin),

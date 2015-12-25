@@ -1,8 +1,8 @@
 /**
- * All models should descend from this base model, which provides a number
- * of utilities for synchronization.
+ * @class
  */
-girder.Model = Backbone.Model.extend({
+girder.Model = Backbone.Model.extend(/** @lends girder.Model.prototype */{
+
     resourceName: null,
     idAttribute: '_id',
 

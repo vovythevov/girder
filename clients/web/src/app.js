@@ -1,4 +1,7 @@
-girder.App = girder.View.extend({
+/**
+ * @class
+ */
+girder.App = girder.View.extend(/** @lends girder.App.prototype */{
     initialize: function () {
         girder.fetchCurrentUser()
             .done(_.bind(function (user) {

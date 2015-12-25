@@ -1,8 +1,9 @@
 /**
  * All collections should descend from this collection base class, which
  * provides nice utilities for pagination and sorting.
+ * @class
  */
-girder.Collection = Backbone.Collection.extend({
+girder.Collection = Backbone.Collection.extend(/** @lends girder.Collection.prototype */{
     resourceName: null,
 
     sortField: 'name',

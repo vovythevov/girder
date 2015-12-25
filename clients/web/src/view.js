@@ -1,4 +1,7 @@
-girder.View = Backbone.View.extend({
+/**
+ * @class
+ */
+girder.View = Backbone.View.extend(/** @lends girder.View.prototype */{
     constructor: function (opts) {
         if (opts && _.has(opts, 'parentView')) {
             if (opts.parentView) {

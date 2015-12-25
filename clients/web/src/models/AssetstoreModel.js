@@ -1,4 +1,8 @@
-girder.models.AssetstoreModel = girder.Model.extend({
+/**
+ * @class
+ * @extends girder.Model
+ */
+girder.models.AssetstoreModel = girder.Model.extend(/** @lends girder.models.AssetstoreModel.prototype */{
     resourceName: 'assetstore',
 
     capacityKnown: function () {

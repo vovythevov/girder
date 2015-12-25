@@ -1,4 +1,7 @@
-girder.Router = Backbone.Router.extend({
+/**
+ * @class
+ */
+girder.Router = Backbone.Router.extend(/** @lends girder.Router.prototype */{
     initialize: function () {
         this._enabled = true;
     },
