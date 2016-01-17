@@ -31,7 +31,7 @@ from girder.models.model_base import GirderException
 from girder.utility import plugin_utilities
 from girder.utility import system
 from girder.utility.progress import ProgressContext
-from ..describe import API_VERSION, Description
+from ..describe import API_VERSION, Description, describeRoute
 from ..rest import Resource, RestException
 
 ModuleStartTime = datetime.datetime.utcnow()
@@ -109,6 +109,17 @@ class System(Resource):
         .errorResponse('Failed to set system setting.', 500))
 
     @access.admin(scope=TokenScope.READ_SETTINGS)
+    @describeRoute(
+        Description('Get the value of a system setting, or a list of them.')
+        .notes('Must be a system administrator to call this.')
+        .param('key', 'The key identifying this setting.', required=False)
+        .param('list', 'A JSON list of keys representing a set of settings to'
+               ' return.', required=False)
+        .param('default', 'If "none", return a null value if a setting is '
+               'currently the default value.  If "default", return the '
+               'default value of the setting(s).', required=False)
+        .errorResponse('You are not a system administrator.', 403)
+    )
     def getSetting(self, params):
         getFuncName = 'get'
         funcParams = {}
@@ -134,31 +145,18 @@ class System(Resource):
         else:
             self.requireParams('key', params)
             return getFunc(params['key'], **funcParams)
-    getSetting.description = (
-        Description('Get the value of a system setting, or a list of them.')
-        .notes('Must be a system administrator to call this.')
-        .param('key', 'The key identifying this setting.', required=False)
-        .param('list', 'A JSON list of keys representing a set of settings to'
-               ' return.', required=False)
-        .param('default', 'If "none", return a null value if a setting is '
-               'currently the default value.  If "default", return the '
-               'default value of the setting(s).', required=False)
-        .errorResponse('You are not a system administrator.', 403))
 
     @access.admin(scope=TokenScope.READ_SETTINGS)
+    @describeRoute(
+        Description('Get the lists of all available and all enabled plugins.')
+        .notes('Must be a system administrator to call this.')
+        .errorResponse('You are not a system administrator.', 403)
+    )
     def getPlugins(self, params):
-        """
-        Return the plugin information for the system. This includes a list of
-        all of the currently enabled plugins, as well as
-        """
         return {
             'all': plugin_utilities.findAllPlugins(),
             'enabled': self.model('setting').get(SettingKey.PLUGINS_ENABLED)
         }
-    getPlugins.description = (
-        Description('Get the lists of all available and all enabled plugins.')
-        .notes('Must be a system administrator to call this.')
-        .errorResponse('You are not a system administrator.', 403))
 
     @access.public
     def getVersion(self, params):
