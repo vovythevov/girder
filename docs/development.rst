@@ -18,8 +18,8 @@ provide helpful development tools and to allow the test suite to run: ::
 
     pip install -r requirements-dev.txt
 
-.. note:: One of the development requirements, `httpretty`, can fail to install
-   if under certain system locales (see the `error report
+.. note:: One of the development indirect requirements, `httpretty`, can fail to
+   install if under certain system locales (see the `error report
    <https://github.com/gabrielfalcao/HTTPretty/issues/108>`_).  Changing to any
    UTF8 locale works around this problem.  For instance, on Ubuntu, you can
    change your system locale using the commands: ::
@@ -227,7 +227,6 @@ You will find many useful methods for client side testing in the ``girderTest`` 
 defined at ``/clients/web/test/testUtils.js``.
 
 
-
 Code Review
 -----------
 
@@ -248,14 +247,40 @@ developing quality software. When performing a code review, ask the following:
     to any vulnerabilities (XSS, CSRF, DB Injection, etc)?
 
 
+Third-Party Libraries
+---------------------
+
+Girder's standard procedure is to use a tool like
+`piprot <https://github.com/sesh/piprot>`_ to check for out-of-date
+third-party library requirements on a quarterly basis (typically near the dates
+of the solstices and equinoxes). Library packages should generally be upgraded
+to the latest released version, except when:
+1. Doing so would introduce any new unfixable bugs or regressions.
+2. Other closely-affiliated projects (e.g.
+   `Romanesco <https://romanesco.readthedocs.org/>`_ use the same library *and*
+   the other project cannot also feasibly be upgraded simultaneously.
+3. The library has undergone a major API change, and development resources do
+   not permit updating Girder accordingly *or* Girder exposes parts
+   of the library as members of Girder's API surface (e.g. CherryPy) and
+   upgrading would cause incompatible API changes to be exposed. In this
+   case, the library should still be upgraded to the highest non-breaking
+   version that is available at the time.
+
+.. note:: In the event that a security vulnerability is discovered in a
+   third-party library used by Girder, the library *must* be upgraded to patch
+   the vulnerability immediately and without regard to the aforementioned
+   exceptions. However, attempts should still be made to maintain API
+   compatibility via monkey patching, wrapper classes, etc.
+
+
 Creating a new release
 ----------------------
 
 Girder releases are uploaded to `PyPI <https://pypi.python.org/pypi/girder>`_
-for easy installation via ``pip``.  In addition, the python source package and
-optional plugin and web client packages are stored as releases inside the
-official `github repository <https://github.com/girder/girder/releases>`_.
-The recommended process for generating a new release is described here.
+for easy installation via ``pip``. In addition, the python source packages
+are stored as releases inside the official
+`github repository <https://github.com/girder/girder/releases>`_. The
+recommended process for generating a new release is described here.
 
 1.  From the target commit, set the desired version number in ``package.json``
     and ``docs/conf.py``.  Create a new commit and note the SHA; this will
@@ -267,38 +292,27 @@ The recommended process for generating a new release is described here.
     (Packaging in an old directory could cause files and plugins to be
     mistakenly included.)
 
-4.  Run ``npm install && grunt package``.  This will generate three
-    new tarballs in the current directory:
-
-     ``girder-<version>.tar.gz``
-         This is the python source distribution for the core server API.
-     ``girder-web-<version>.tar.gz``
-         This is the web client libraries.
-     ``girder-plugins-<version>.tar.gz``
-         This contains all of the plugins in the main repository.
+4.  Run ``npm install && grunt package``.  This will generate the source
+    distribution tarball with a name like ``girder-<version>.tar.gz``.
 
 5.  Create a new virtual environment and install the python package into
-    it as well as the optional web and plugin components.  This should
-    not be done in the repository directory because the wrong Girder
-    package will be imported.  ::
+    it and build the web client. This should not be done in the repository
+    directory because the wrong Girder package will be imported.  ::
 
         mkdir test && cd test
         virtualenv release
         source release/bin/activate
         pip install ../girder-<version>.tar.gz
-        girder-install web -s ../girder-web-<version>.tar.gz
-        girder-install plugin -s ../girder-plugins-<version>.tar.gz
+        girder-install web
 
-6.  Now start up the Girder server and ensure that you can browse
-    the web client, plugins, and swagger docs.
+6.  Now start up the Girder server and ensure that you can browse the web
+    client, plugins, and swagger docs.
 
 7.  When you are confident everything is working correctly, generate
     a `new release <https://github.com/girder/girder/releases/new>`_
-    on GitHub.  You must be
-    sure to use a tag version of ``v<version>``, where ``<version>``
-    is the version number as it exists in ``package.json``.  For
-    example, ``v0.2.4``.  Attach the three tarballs you generated
-    to the release.
+    on GitHub.  You must be sure to use a tag version of ``v<version>``, where
+    ``<version>`` is the version number as it exists in ``package.json``.  For
+    example, ``v0.2.4``.  Attach the tarball you generated to the release.
 
 8.  Add the tagged version to `readthedocs <https://readthedocs.org/projects/girder/>`_
     and make sure it builds correctly.

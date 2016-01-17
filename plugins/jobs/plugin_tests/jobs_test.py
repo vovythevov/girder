@@ -21,6 +21,7 @@ import time
 
 from tests import base
 from girder import events
+from girder.models.model_base import ValidationException
 
 
 JobStatus = None
@@ -200,6 +201,7 @@ class JobsTestCase(base.TestCase):
         path = '/job/%s' % job['_id']
         resp = self.request(path)
         self.assertEqual(resp.json['progress'], None)
+        self.assertEqual(resp.json['timestamps'], [])
 
         resp = self.request(path, method='PUT', user=self.users[1], params={
             'progressTotal': 100,
@@ -215,6 +217,21 @@ class JobsTestCase(base.TestCase):
             'message': 'Started',
             'notificationId': None
         })
+
+        # The status update should make it so we now have a timestamp
+        self.assertEqual(len(resp.json['timestamps']), 1)
+        self.assertEqual(
+            resp.json['timestamps'][0]['status'], JobStatus.RUNNING)
+        self.assertIn('time', resp.json['timestamps'][0])
+
+        # If the status does not change on update, no timestamp should be added
+        resp = self.request(path, method='PUT', user=self.users[1], params={
+            'status': JobStatus.RUNNING
+        })
+        self.assertStatusOk(resp)
+        self.assertEqual(len(resp.json['timestamps']), 1)
+        self.assertEqual(
+            resp.json['timestamps'][0]['status'], JobStatus.RUNNING)
 
         # We passed notify=false, so we should not have any notifications
         resp = self.request(path='/notification/stream', method='GET',
@@ -297,3 +314,20 @@ class JobsTestCase(base.TestCase):
 
         job = self.model('job', 'jobs').load(job['_id'], force=True)
         self.assertEqual(job['log'], 'job failed')
+
+    def testValidateCustomStatus(self):
+        jobModel = self.model('job', 'jobs')
+        job = jobModel.createJob(title='test', type='x', user=self.users[0])
+
+        def validateStatus(event):
+            if event.info == 1234:
+                event.preventDefault().addResponse(True)
+
+        with self.assertRaises(ValidationException):
+            jobModel.updateJob(job, status=1234)  # Should fail
+
+        with events.bound('jobs.status.validate', 'test', validateStatus):
+            jobModel.updateJob(job, status=1234)  # Should work
+
+            with self.assertRaises(ValidationException):
+                jobModel.updateJob(job, status=4321)  # Should fail

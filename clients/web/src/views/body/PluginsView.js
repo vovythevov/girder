@@ -52,9 +52,10 @@ girder.views.PluginsView = girder.View.extend({
         }));
 
         var view = this;
-        this.$('.g-plugin-switch').bootstrapSwitch()
-            .off('switchChange.bootstrapSwitch')
-            .on('switchChange.bootstrapSwitch', function (event, state) {
+        this.$('.g-plugin-switch').bootstrapSwitch({
+            offText: '&nbsp;'
+        }).off('switchChange.bootstrapSwitch')
+          .on('switchChange.bootstrapSwitch', function (event, state) {
                 var plugin = $(event.currentTarget).attr('key');
                 if (state === true) {
                     view.enabled.push(plugin);
@@ -74,6 +75,11 @@ girder.views.PluginsView = girder.View.extend({
             placement: 'bottom',
             delay: {show: 100}
         });
+        this.$('.g-experimental-notice').tooltip({
+            container: this.$el,
+            animation: false,
+            delay: {show: 100}
+        });
         if (girder.pluginsChanged) {
             $('.g-plugin-restart').addClass('g-plugin-restart-show');
         }
@@ -83,7 +89,7 @@ girder.views.PluginsView = girder.View.extend({
 
     /**
      * Takes a plugin object and recursively determines if it fulfills
-     * dependencies. Meaning, it's dependencies exist in this.allPlugins.
+     * dependencies. Meaning, its dependencies exist in this.allPlugins.
      **/
     _meetsDependencies: function (plugin) {
         return _.every(plugin.dependencies, function (pluginName) {

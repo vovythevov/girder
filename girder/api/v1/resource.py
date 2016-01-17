@@ -20,7 +20,7 @@
 import cherrypy
 import json
 
-from ..describe import Description
+from ..describe import Description, describeRoute
 from ..rest import Resource as BaseResource, RestException
 from girder.constants import AccessType
 from girder.api import access
@@ -29,12 +29,16 @@ from girder.utility import acl_mixin
 from girder.utility import ziputil
 from girder.utility.progress import ProgressContext
 
+# Plugins can modify this set to allow other types to be searched
+allowedSearchTypes = {'collection', 'folder', 'group', 'item', 'user'}
+
 
 class Resource(BaseResource):
     """
     API Endpoints that deal with operations across multiple resource types.
     """
     def __init__(self):
+        super(Resource, self).__init__()
         self.resourceName = 'resource'
         self.route('GET', ('search',), self.search)
         self.route('GET', ('lookup',), self.lookup)
@@ -46,59 +50,60 @@ class Resource(BaseResource):
         self.route('DELETE', (), self.delete)
 
     @access.public
+    @describeRoute(
+        Description('Search for resources in the system.')
+        .param('q', 'The search query.')
+        .param('mode', 'The search mode. Can use either a text search or a '
+               'prefix-based search.', enum=('text', 'prefix'), required=False,
+               default='text')
+        .param('types', 'A JSON list of resource types to search for, e.g. '
+               "'user', 'folder', 'item'.")
+        .param('level', 'Minimum required access level.', required=False,
+               dataType='int', default=AccessType.READ)
+        .pagingParams(defaultSort=None, defaultLimit=10)
+        .errorResponse('Invalid type list format.')
+    )
     def search(self, params):
-        """
-        This endpoint can be used to text search against multiple different
-        model types at once.
-        :param q: The search query string.
-        :param types: A JSON list of types to search.
-        :type types: str
-        :param limit: The result limit per type. Defaults to 10.
-        """
         self.requireParams(('q', 'types'), params)
+
+        mode = params.get('mode', 'text')
+        level = AccessType.validate(params.get('level', AccessType.READ))
         user = self.getCurrentUser()
 
         limit = int(params.get('limit', 10))
         offset = int(params.get('offset', 0))
 
-        results = {}
+        if mode == 'text':
+            method = 'textSearch'
+        elif mode == 'prefix':
+            method = 'prefixSearch'
+        else:
+            raise RestException(
+                'The search mode must be either "text" or "prefix".')
+
         try:
             types = json.loads(params['types'])
         except ValueError:
             raise RestException('The types parameter must be JSON.')
 
-        if 'item' in types:
-            results['item'] = [
-                self.model('item').filter(item) for item in
-                self.model('item').textSearch(
-                    params['q'], user=user, limit=limit, offset=offset)]
-        if 'collection' in types:
-            results['collection'] = [
-                self.model('collection').filter(c, user) for c in
-                self.model('collection').textSearch(
-                    params['q'], user=user, limit=limit, offset=offset)]
-        if 'folder' in types:
-            results['folder'] = [
-                self.model('folder').filter(f, user) for f in
-                self.model('folder').textSearch(
-                    params['q'], user=user, limit=limit, offset=offset)]
-        if 'group' in types:
-            results['group'] = [
-                self.model('group').filter(g, user) for g in
-                self.model('group').textSearch(
-                    params['q'], user=user, limit=limit, offset=offset)]
-        if 'user' in types:
-            results['user'] = [
-                self.model('user').filter(u, user) for u in
-                self.model('user').textSearch(
-                    params['q'], user=user, limit=limit, offset=offset)]
+        results = {}
+        for modelName in types:
+            if modelName not in allowedSearchTypes:
+                continue
+
+            if '.' in modelName:
+                name, plugin = modelName.rsplit('.', 1)
+                model = self.model(name, plugin)
+            else:
+                model = self.model(modelName)
+
+            results[modelName] = [
+                model.filter(d, user) for d in getattr(model, method)(
+                    query=params['q'], user=user, limit=limit, offset=offset,
+                    level=level)
+            ]
+
         return results
-    search.description = (
-        Description('Text search for resources in the system.')
-        .param('q', 'The search query.')
-        .param('types', """A JSON list of resource types to search for, e.g.
-                'user', 'folder', 'item'.""")
-        .errorResponse('Invalid type list format.'))
 
     def _validateResourceSet(self, params, allowedModels=None):
         """
@@ -108,7 +113,7 @@ class Resource(BaseResource):
         :param params: a dictionary of parameters that must include 'resources'
         :param allowedModels: if present, an iterable of models that may be
                               included in the resources.
-        :returns: the json decoded resource dictionary.
+        :returns: the JSON decoded resource dictionary.
         """
         self.requireParams(('resources', ), params)
         try:
@@ -219,13 +224,14 @@ class Resource(BaseResource):
         Description('Look up a resource in the data hierarchy by path.')
         .param('path',
                'The path of the resource.  The path must be an absolute Unix '
-               'path starting with either "/user/[user name]", for a user\'s'
+               'path starting with either "/user/[user name]", for a user\'s '
                'resources or "/collection/[collection name]", for resources '
                'under a collection.')
         .errorResponse('Path is invalid.')
         .errorResponse('Path refers to a resource that does not exist.')
         .errorResponse('Read access was denied for the resource.', 403))
 
+    @access.cookie(force=True)
     @access.public
     def download(self, params):
         """
@@ -261,7 +267,6 @@ class Resource(BaseResource):
                             yield data
             yield zip.footer()
         return stream
-    download.cookieAuth = True
     download.description = (
         Description('Download a set of items, folders, collections, and users '
                     'as a zip archive.')
@@ -272,7 +277,7 @@ class Resource(BaseResource):
         .param('resources', 'A JSON-encoded list of types to download.  Each '
                'type is a list of ids.  For example: {"item": [(item id 1), '
                '(item id 2)], "folder": [(folder id 1)]}.')
-        .param('includeMetadata', 'Include any metadata in json files in the '
+        .param('includeMetadata', 'Include any metadata in JSON files in the '
                'archive.', required=False, dataType='boolean', default=False)
         .errorResponse('Unsupport or unknown resource type.')
         .errorResponse('Invalid resources format.')

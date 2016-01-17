@@ -43,6 +43,7 @@ class System(Resource):
     The system endpoints are for querying and managing system-wide properties.
     """
     def __init__(self):
+        super(System, self).__init__()
         self.resourceName = 'system'
         self.route('DELETE', ('setting',), self.unsetSetting)
         self.route('GET', ('version',), self.getVersion)
@@ -283,7 +284,7 @@ class System(Resource):
     @access.admin
     def restartServer(self, params):
         """
-        Restart the girder rest server.  This reloads everything, which is
+        Restart the Girder REST server.  This reloads everything, which is
         currently necessary to enable or disable a plugin.
         """
         class Restart(cherrypy.process.plugins.Monitor):

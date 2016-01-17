@@ -17,18 +17,24 @@
 #  limitations under the License.
 ###############################################################################
 
+import copy
 import functools
 import itertools
 import pymongo
+import re
 import six
-
-from girder.external.mongodb_proxy import MongoProxy
 
 from bson.objectid import ObjectId
 from girder import events
-from girder.constants import AccessType, TerminalColor, TEXT_SCORE_SORT_MAX
-from girder.utility.model_importer import ModelImporter
+from girder.constants import AccessType, CoreEventHandler, TerminalColor, \
+    TEXT_SCORE_SORT_MAX
+from girder.external.mongodb_proxy import MongoProxy
 from girder.models import getDbConnection
+from girder.utility.model_importer import ModelImporter
+
+# pymongo3 complains about extra kwargs to find(), so we must filter them.
+_allowedFindArgs = ('cursor_type', 'allow_partial_results', 'oplog_replay',
+                    'modifiers', 'manipulate')
 
 
 class Model(ModelImporter):
@@ -44,6 +50,7 @@ class Model(ModelImporter):
         self._indices = []
         self._textIndex = None
         self._textLanguage = None
+        self.prefixSearchFields = ('lowerName', 'name')
 
         self._filterKeys = {
             AccessType.READ: set(),
@@ -66,14 +73,14 @@ class Model(ModelImporter):
 
         for index in self._indices:
             if isinstance(index, (list, tuple)):
-                self.collection.ensure_index(index[0], **index[1])
+                self.collection.create_index(index[0], **index[1])
             else:
-                self.collection.ensure_index(index)
+                self.collection.create_index(index)
 
         if type(self._textIndex) is dict:
             textIdx = [(k, 'text') for k in six.viewkeys(self._textIndex)]
             try:
-                self.collection.ensure_index(
+                self.collection.create_index(
                     textIdx, weights=self._textIndex,
                     default_language=self._textLanguage)
             except pymongo.errors.OperationFailure:
@@ -128,7 +135,7 @@ class Model(ModelImporter):
         :type user: dict or None
         :param additionalKeys: Any additional keys that should be included in
             the document for this call only.
-        :type additionalKeys: list, tuple, or None
+        :type additionalKeys: list, tuple, set, or None
         :returns: The filtered document (dict).
         """
         if doc is None:
@@ -164,7 +171,7 @@ class Model(ModelImporter):
         fields that should be indexed in the database if there are any.
         Otherwise, it is not necessary to call this method. Elements of the list
         may also be a list or tuple, where the second element is a dictionary
-        that will be passed as kwargs to the pymongo ensure_index call.
+        that will be passed as kwargs to the pymongo create_index call.
         """
         self._indices.extend(indices)
 
@@ -196,9 +203,10 @@ class Model(ModelImporter):
         raise Exception('Must override initialize() in %s model'
                         % self.__class__.__name__)  # pragma: no cover
 
-    def find(self, query=None, offset=0, limit=0, **kwargs):
+    def find(self, query=None, offset=0, limit=0, timeout=None,
+             fields=None, sort=None, **kwargs):
         """
-        Search the collection by a set of parameters. Passes any kwargs
+        Search the collection by a set of parameters. Passes any extra kwargs
         through to the underlying pymongo.collection.find function.
 
         :param query: The search query (see general MongoDB docs for "find()")
@@ -210,22 +218,27 @@ class Model(ModelImporter):
         :param sort: The sort order.
         :type sort: List of (key, order) tuples.
         :param fields: A mask for filtering result documents by key.
-        :type fields: List of strings
+        :type fields: list[str]
+        :param timeout: Cursor timeout in ms. Default is no timeout.
+        :type timeout: int
         :returns: A pymongo database cursor.
         """
-        if not query:
-            query = {}
+        query = query or {}
+        kwargs = {k: kwargs[k] for k in kwargs if k in _allowedFindArgs}
 
-        if 'timeout' not in kwargs:
-            kwargs['timeout'] = False
+        cursor = self.collection.find(
+            filter=query, skip=offset, limit=limit, projection=fields,
+            no_cursor_timeout=timeout is None, sort=sort, **kwargs)
 
-        return self.collection.find(
-            spec=query, skip=offset, limit=limit, **kwargs)
+        if timeout:
+            cursor.max_time_ms(timeout)
 
-    def findOne(self, query=None, **kwargs):
+        return cursor
+
+    def findOne(self, query=None, fields=None, **kwargs):
         """
         Search the collection by a set of parameters. Passes any kwargs
-        through to the underlying pymongo.collection.find function.
+        through to the underlying pymongo.collection.find_one function.
 
         :param query: The search query (see general MongoDB docs for "find()")
         :type query: dict
@@ -235,9 +248,9 @@ class Model(ModelImporter):
         :type fields: List of strings
         :returns: the first object that was found, or None if none found.
         """
-        if not query:
-            query = {}
-        return self.collection.find_one(query, **kwargs)
+        query = query or {}
+        kwargs = {k: kwargs[k] for k in kwargs if k in _allowedFindArgs}
+        return self.collection.find_one(query, projection=fields, **kwargs)
 
     def textSearch(self, query, offset=0, limit=0, sort=None, fields=None,
                    filters=None):
@@ -251,10 +264,8 @@ class Model(ModelImporter):
         :returns: A pymongo cursor. It is left to the caller to build the
             results from the cursor.
         """
-        if not filters:
-            filters = {}
-        if not fields:
-            fields = {}
+        filters = filters or {}
+        fields = fields or {}
 
         fields['_textScore'] = {'$meta': 'textScore'}
         filters['$text'] = {'$search': query}
@@ -269,6 +280,45 @@ class Model(ModelImporter):
             cursor.sort([('_textScore', {'$meta': 'textScore'})])
 
         return cursor
+
+    def prefixSearch(self, query, offset=0, limit=0, sort=None, fields=None,
+                     filters=None, prefixSearchFields=None):
+        """
+        Search for documents in this model's collection by a prefix string.
+        The fields that will be searched based on this prefix must be set as
+        the ``prefixSearchFields`` attribute of this model, which must be an
+        iterable. Elements of this iterable must be either a string representing
+        the field name, or a 2-tuple in which the first element is the field
+        name, and the second element is a string representing the regex search
+        options.
+
+        :param query: The prefix string to look for.
+        :type query: str
+        :param filters: Any additional query operators to apply.
+        :type filters: dict
+        :param prefixSearchFields: To override the model's prefixSearchFields
+            attribute for this invocation, pass an alternate iterable.
+        :returns: A pymongo cursor. It is left to the caller to build the
+            results from the cursor.
+        """
+        filters = filters or {}
+        filters['$or'] = filters.get('$or', [])
+
+        for field in (prefixSearchFields or self.prefixSearchFields):
+            if isinstance(field, (list, tuple)):
+                filters['$or'].append({
+                    field[0]: {
+                        '$regex': '^%s' % re.escape(query),
+                        '$options': field[1]
+                    }
+                })
+            else:
+                filters['$or'].append({
+                    field: {'$regex': '^%s' % re.escape(query)}
+                })
+
+        return self.find(
+            filters, offset=offset, limit=limit, sort=sort, fields=fields)
 
     def save(self, document, validate=True, triggerEvents=True):
         """
@@ -297,14 +347,17 @@ class Model(ModelImporter):
             if event.defaultPrevented:
                 return document
 
-        sendCreateEvent = ('_id' not in document)
-        document['_id'] = self.collection.save(document)
+        isNew = '_id' not in document
+        if isNew:
+            document['_id'] = self.collection.insert_one(document).inserted_id
+        else:
+            self.collection.replace_one(
+                {'_id': document['_id']}, document, True)
 
         if triggerEvents:
-            if sendCreateEvent:
-                events.trigger('model.{}.save.created'.format(self.name),
-                               document)
-            events.trigger('model.{}.save.after'.format(self.name), document)
+            if isNew:
+                events.trigger('model.%s.save.created' % self.name, document)
+            events.trigger('model.%s.save.after' % self.name, document)
 
         return document
 
@@ -315,8 +368,6 @@ class Model(ModelImporter):
         this collection to a document that is being deleted from another
         collection.
 
-        This is a thin wrapper around pymongo db.collection.update().
-
         For updating a single document, use the save() model method instead.
 
         :param query: The query for finding documents to update. It's
@@ -324,8 +375,15 @@ class Model(ModelImporter):
         :type query: dict
         :param update: The update specifier.
         :type update: dict
+        :param multi: Whether to update a single document, or all matching
+            documents.
+        :type multi: bool
+        :returns: A pymongo UpdateResult object.
         """
-        self.collection.update(query, update, multi=multi)
+        if multi:
+            return self.collection.update_many(query, update)
+        else:
+            return self.collection.update_one(query, update)
 
     def increment(self, query, field, amount, **kwargs):
         """
@@ -359,8 +417,9 @@ class Model(ModelImporter):
                 'document': document,
                 'kwargs': kwargs
             })
+
         if not event.defaultPrevented and not kwargsEvent.defaultPrevented:
-            return self.collection.remove({'_id': document['_id']})
+            return self.collection.delete_one({'_id': document['_id']})
 
     def removeWithQuery(self, query):
         """
@@ -369,7 +428,7 @@ class Model(ModelImporter):
         """
         assert query
 
-        return self.collection.remove(query)
+        return self.collection.delete_many(query)
 
     def load(self, id, objectId=True, fields=None, exc=False):
         """
@@ -453,6 +512,57 @@ class AccessControlledModel(Model):
     It also provides methods for setting access control policies on the
     resource.
     """
+
+    def __init__(self):
+        # Do the bindings before calling __init__(), in case a derived class
+        # wants to change things in initialize()
+        events.bind('model.user.remove',
+                    CoreEventHandler.ACCESS_CONTROL_CLEANUP,
+                    self._cleanupDeletedEntity)
+        events.bind('model.group.remove',
+                    CoreEventHandler.ACCESS_CONTROL_CLEANUP,
+                    self._cleanupDeletedEntity)
+        super(AccessControlledModel, self).__init__()
+
+    def _cleanupDeletedEntity(self, event):
+        """
+        This callback removes references to deleted users or groups from all
+        concrete AccessControlledModel subtypes.
+
+        This generally should not be called or overridden directly. This should
+        not be unregistered, that would allow references to non-existent users
+        and groups to remain.
+        """
+        entityType = event.name.split('.')[1]
+        entityDoc = event.info
+
+        if entityType == self.name:
+            # Avoid circular callbacks, since Users and Groups are themselves
+            # AccessControlledModels
+            return
+
+        if entityType == 'user':
+            # Remove creator references for this user entity.
+            creatorQuery = {
+                'creatorId': entityDoc['_id']
+            }
+            creatorUpdate = {
+                '$set': {'creatorId': None}
+            }
+            # If a given access-controlled resource doesn't store creatorId,
+            # this will simply do nothing
+            self.update(creatorQuery, creatorUpdate)
+
+        # Remove references to this entity from access-controlled resources.
+        acQuery = {
+            'access.%ss.id' % entityType: entityDoc['_id']
+        }
+        acUpdate = {
+            '$pull': {
+                'access.%ss' % entityType: {'id': entityDoc['_id']}
+            }
+        }
+        self.update(acQuery, acUpdate)
 
     def filter(self, doc, user, additionalKeys=None):
         """
@@ -676,26 +786,47 @@ class AccessControlledModel(Model):
     def getFullAccessList(self, doc):
         """
         Return an object representing the full access list on this document.
-        This simply includes the names of the users and groups with the access
-        list.
+        This simply includes the names of the users and groups with the ACL.
+
+        If the document contains references to users or groups that no longer
+        exist, they are simply removed from the ACL, and the modified ACL is
+        persisted at the end of this method if any removals occurred.
+
+        :param doc: The document whose ACL to return.
+        :type doc: dict
+        :returns: A dict containing `users` and `groups` keys.
         """
         acList = {
             'users': doc.get('access', {}).get('users', []),
             'groups': doc.get('access', {}).get('groups', [])
         }
 
-        for user in acList['users']:
+        dirty = False
+
+        for user in acList['users'][:]:
             userDoc = self.model('user').load(
                 user['id'], force=True,
                 fields=['firstName', 'lastName', 'login'])
+            if not userDoc:
+                dirty = True
+                acList['users'].remove(user)
+                continue
             user['login'] = userDoc['login']
             user['name'] = ' '.join((userDoc['firstName'], userDoc['lastName']))
 
-        for grp in acList['groups']:
+        for grp in acList['groups'][:]:
             grpDoc = self.model('group').load(
                 grp['id'], force=True, fields=['name', 'description'])
+            if not grpDoc:
+                dirty = True
+                acList['groups'].remove(grp)
+                continue
             grp['name'] = grpDoc['name']
             grp['description'] = grpDoc['description']
+
+        if dirty:
+            # If we removed invalid entries from the ACL, persist the changes.
+            self.setAccessList(doc, acList, save=True)
 
         return acList
 
@@ -731,28 +862,28 @@ class AccessControlledModel(Model):
         :type level: AccessType
         :returns: Whether the access is granted.
         """
-        if user is None:
-            # Short-circuit the case of anonymous users
-            return level == AccessType.READ and doc.get('public', False) is True
-        elif user.get('admin', False) is True:
+        if level <= AccessType.READ and doc.get('public', False) is True:
+            # Short-circuit the case of public resources
+            return True
+        elif user is None:
+            # Anonymous users can only see public resources
+            return False
+
+        if user.get('admin', False) is True:
             # Short-circuit the case of admins
             return True
-        else:
-            # Short-circuit the case of public resources
-            if level == AccessType.READ and doc.get('public', False) is True:
+
+        # If all that fails, descend into real permission checking.
+        if 'access' in doc:
+            perms = doc['access']
+            if self._hasGroupAccess(perms.get('groups', []),
+                                    user.get('groups', []), level):
+                return True
+            elif self._hasUserAccess(perms.get('users', []),
+                                     user['_id'], level):
                 return True
 
-            # If all that fails, descend into real permission checking.
-            if 'access' in doc:
-                perms = doc['access']
-                if self._hasGroupAccess(perms.get('groups', []),
-                                        user.get('groups', []), level):
-                    return True
-                elif self._hasUserAccess(perms.get('users', []),
-                                         user['_id'], level):
-                    return True
-
-            return False
+        return False
 
     def requireAccess(self, doc, user=None, level=AccessType.READ):
         """
@@ -764,8 +895,10 @@ class AccessControlledModel(Model):
                 perm = 'Read'
             elif level == AccessType.WRITE:
                 perm = 'Write'
-            else:
+            elif level in (AccessType.ADMIN, AccessType.SITE_ADMIN):
                 perm = 'Admin'
+            else:
+                perm = 'Unknown level'
             if user:
                 userid = str(user.get('_id', ''))
             else:
@@ -800,7 +933,7 @@ class AccessControlledModel(Model):
         """
 
         # Ensure we load access and public, these are needed by requireAccess
-        loadFields = None
+        loadFields = fields
         if not force and fields:
             loadFields = list(set(fields) | {'access', 'public'})
 
@@ -833,13 +966,13 @@ class AccessControlledModel(Model):
         """
         dest['public'] = src.get('public', False)
         if 'access' in src:
-            dest['access'] = src['access']
+            dest['access'] = copy.deepcopy(src['access'])
 
         if save:
             dest = self.save(dest, validate=False)
         return dest
 
-    def filterResultsByPermission(self, cursor, user, level, limit, offset=0,
+    def filterResultsByPermission(self, cursor, user, level, limit=0, offset=0,
                                   removeKeys=()):
         """
         Given a database result cursor, this generator will yield only the
@@ -869,21 +1002,40 @@ class AccessControlledModel(Model):
             yield result
 
     def textSearch(self, query, user=None, filters=None, limit=0, offset=0,
-                   sort=None, fields=None):
+                   sort=None, fields=None, level=AccessType.READ):
         """
         Custom override of Model.textSearch to also force permission-based
         filtering. The parameters are the same as Model.textSearch.
 
         :param user: The user to apply permission filtering for.
+        :type user: dict or None
+        :param level: The access level to require.
+        :type level: girder.constants.AccessType
         """
-        if not filters:
-            filters = {}
+        filters = filters or {}
 
         cursor = Model.textSearch(
             self, query=query, filters=filters, sort=sort, fields=fields)
         return self.filterResultsByPermission(
-            cursor, user=user, level=AccessType.READ, limit=limit,
-            offset=offset)
+            cursor, user=user, level=level, limit=limit, offset=offset)
+
+    def prefixSearch(self, query, user=None, filters=None, limit=0, offset=0,
+                     sort=None, fields=None, level=AccessType.READ):
+        """
+        Custom override of Model.prefixSearch to also force permission-based
+        filtering. The parameters are the same as Model.prefixSearch.
+
+        :param user: The user to apply permission filtering for.
+        :type user: dict or None
+        :param level: The access level to require.
+        :type level: girder.constants.AccessType
+        """
+        filters = filters or {}
+
+        cursor = Model.prefixSearch(
+            self, query=query, filters=filters, sort=sort, fields=fields)
+        return self.filterResultsByPermission(
+            cursor, user=user, level=level, limit=limit, offset=offset)
 
 
 class AccessException(Exception):

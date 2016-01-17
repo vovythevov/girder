@@ -43,9 +43,17 @@ class Collection(AccessControlledModel):
             '_id', 'name', 'description', 'public', 'created', 'updated',
             'size'))
 
-    def filter(self, collection, user=None):
-        """Preserved override for kwarg backwards compatibility."""
-        return AccessControlledModel.filter(self, doc=collection, user=user)
+    def filter(self, *args, **kwargs):
+        """
+        Preserved override for kwarg backwards compatibility. Prior to the
+        refactor for centralizing model filtering, this method's first formal
+        parameter was called "collection", whereas the centralized version's
+        first parameter is called "doc". This override simply detects someone
+        using the old kwarg and converts it to the new form.
+        """
+        if 'collection' in kwargs:
+            args = [kwargs.pop('collection')] + list(args)
+        return super(Collection, self).filter(*args, **kwargs)
 
     def validate(self, doc):
         doc['name'] = doc['name'].strip()
@@ -66,6 +74,8 @@ class Collection(AccessControlledModel):
         if duplicate is not None:
             raise ValidationException('A collection with that name already '
                                       'exists.', 'name')
+
+        doc['lowerName'] = doc['name'].lower()
 
         return doc
 
@@ -126,8 +136,9 @@ class Collection(AccessControlledModel):
             'size': 0
         }
 
-        self.setPublic(collection, public=public)
-        self.setUserAccess(collection, user=creator, level=AccessType.ADMIN)
+        self.setPublic(collection, public, save=False)
+        self.setUserAccess(collection, user=creator, level=AccessType.ADMIN,
+                           save=False)
 
         return self.save(collection)
 
@@ -153,7 +164,7 @@ class Collection(AccessControlledModel):
         :param user: a user used to validate data that is returned.
         :param path: a path prefix to add to the results.
         :param includeMetadata: if True and there is any metadata, include a
-                                result which is the json string of the
+                                result which is the JSON string of the
                                 metadata.  This is given a name of
                                 metadata[-(number).json that is distinct from
                                 any file within the item.
@@ -190,7 +201,7 @@ class Collection(AccessControlledModel):
 
         if level is not None:
             folders = self.filterResultsByPermission(
-                cursor=folders, user=user, level=level, limit=None)
+                cursor=folders, user=user, level=level)
         count += sum(self.model('folder').subtreeCount(
             folder, includeItems=includeItems, user=user, level=level)
             for folder in folders)
@@ -233,7 +244,7 @@ class Collection(AccessControlledModel):
             })
 
             folders = self.filterResultsByPermission(
-                cursor=cursor, user=user, level=AccessType.ADMIN, limit=None)
+                cursor=cursor, user=user, level=AccessType.ADMIN)
 
             for folder in folders:
                 self.model('folder').setAccessList(

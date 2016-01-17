@@ -116,6 +116,14 @@ class AccessType:
     ADMIN = 2
     SITE_ADMIN = 100
 
+    @classmethod
+    def validate(cls, level):
+        level = int(level)
+        if level in (cls.NONE, cls.READ, cls.WRITE, cls.ADMIN, cls.SITE_ADMIN):
+            return level
+        else:
+            raise ValueError('Invalid AccessType: %d.' % level)
+
 
 class SettingKey:
     """
@@ -128,12 +136,17 @@ class SettingKey:
     EMAIL_HOST = 'core.email_host'
     REGISTRATION_POLICY = 'core.registration_policy'
     SMTP_HOST = 'core.smtp_host'
+    SMTP_PORT = 'core.smtp.port'
+    SMTP_ENCRYPTION = 'core.smtp.encryption'
+    SMTP_USERNAME = 'core.smtp.username'
+    SMTP_PASSWORD = 'core.smtp.password'
     UPLOAD_MINIMUM_CHUNK_SIZE = 'core.upload_minimum_chunk_size'
     CORS_ALLOW_ORIGIN = 'core.cors.allow_origin'
     CORS_ALLOW_METHODS = 'core.cors.allow_methods'
     CORS_ALLOW_HEADERS = 'core.cors.allow_headers'
     ADD_TO_GROUP_POLICY = 'core.add_to_group_policy'
     COLLECTION_CREATE_POLICY = 'core.collection_create_policy'
+    USER_DEFAULT_FOLDERS = 'core.user_default_folders'
 
 
 class SettingDefault:
@@ -144,9 +157,11 @@ class SettingDefault:
     defaults = {
         SettingKey.PLUGINS_ENABLED: [],
         SettingKey.COOKIE_LIFETIME: 180,
-        SettingKey.EMAIL_FROM_ADDRESS: 'no-reply@girder.org',
+        SettingKey.EMAIL_FROM_ADDRESS: 'Girder <no-reply@girder.org>',
         SettingKey.REGISTRATION_POLICY: 'open',
-        SettingKey.SMTP_HOST: 'localhost:25',
+        SettingKey.SMTP_HOST: 'localhost',
+        SettingKey.SMTP_PORT: 25,
+        SettingKey.SMTP_ENCRYPTION: 'none',
         SettingKey.UPLOAD_MINIMUM_CHUNK_SIZE: 1024 * 1024 * 5,
         # These headers are necessary to allow the web server to work with just
         # changes to the CORS origin
@@ -161,8 +176,14 @@ class SettingDefault:
             'open': False,
             'groups': [],
             'users': []
-        }
+        },
+        SettingKey.USER_DEFAULT_FOLDERS: 'public_private'
     }
+
+
+class SortDir(object):
+    ASCENDING = 1
+    DESCENDING = -1
 
 
 class TokenScope:
@@ -178,3 +199,26 @@ class TokenScope:
     READ_ASSETSTORES = 'core.assetstore.read'
     PARTIAL_UPLOAD_READ = 'core.partial_upload.read'
     PARTIAL_UPLOAD_CLEAN = 'core.partial_upload.clean'
+
+
+class CoreEventHandler(object):
+    """
+    This enum represents handler identifier strings for core event handlers.
+    If you wish to unbind a core event handler, use one of these as the
+    ``handlerName`` argument. Unbinding core event handlers can be used to
+    disable certain default functionalities.
+    """
+    # For removing deleted user/group references from AccessControlledModel
+    ACCESS_CONTROL_CLEANUP = 'core.cleanupDeletedEntity'
+
+    # For updating an item's size to include a new file.
+    FILE_PROPAGATE_SIZE = 'core.propagateSizeToItem'
+
+    # For adding a group's creator into its ACL at creation time.
+    GROUP_CREATOR_ACCESS = 'core.grantCreatorAccess'
+
+    # For creating the default Public and Private folders at user creation time.
+    USER_DEFAULT_FOLDERS = 'core.addDefaultFolders'
+
+    # For adding a user into its own ACL.
+    USER_SELF_ACCESS = 'core.grantSelfAccess'

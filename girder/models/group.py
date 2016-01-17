@@ -20,7 +20,8 @@
 import datetime
 
 from .model_base import AccessControlledModel, ValidationException
-from girder.constants import AccessType
+from girder import events
+from girder.constants import AccessType, CoreEventHandler
 
 
 class Group(AccessControlledModel):
@@ -63,31 +64,38 @@ class Group(AccessControlledModel):
 
         self.exposeFields(level=AccessType.READ, fields=(
             '_id', 'name', 'public', 'description', 'created', 'updated',
-            'addAllowed'))
+            'addAllowed', '_addToGroupPolicy'))
 
-    def filter(self, group, user, accessList=False, requests=False):
+        events.bind('model.group.save.created',
+                    CoreEventHandler.GROUP_CREATOR_ACCESS,
+                    self._grantCreatorAccess)
+
+    def filter(self, *args, **kwargs):
         """
-        Filter a group document for display to the user.
+        Preserved override for kwarg backwards compatibility. Prior to the
+        refactor for centralizing model filtering, this method's first formal
+        parameter was called "group", whereas the centralized version's first
+        parameter is called "doc". This override simply detects someone using
+        the old kwarg and converts it to the new form.
 
-        :param group: The document to filter.
-        :type group: dict
-        :param user: The current user.
-        :type user: dict
-        :param accessList: Whether to include the access control list field.
-        :type accessList: bool
-        :param requests: Whether to include the requests list field.
-        :type requests: bool
-        :returns: The filtered group document.
+        The old method for this model took two boolean kwargs, ``accessList``
+        and ``requests``. These options are now deprecated, but are still
+        supported for backward compatibility.
         """
-        filtered = AccessControlledModel.filter(self, doc=group, user=user)
+        if 'group' in kwargs:
+            args = [kwargs.pop('group')] + list(args)
 
-        if accessList:
-            filtered['access'] = self.getFullAccessList(group)
+        acl = kwargs.pop('accessList') if 'accessList' in kwargs else False
+        reqs = kwargs.pop('requests') if 'requests' in kwargs else False
 
-        if requests:
-            filtered['requests'] = list(self.getFullRequestList(group))
+        group = super(Group, self).filter(*args, **kwargs)
 
-        return filtered
+        if acl and 'access' not in group:
+            group['access'] = self.getFullAccessList(args[0])
+        if reqs and 'requests' not in group:
+            group['requests'] = list(self.getFullRequestList(args[0]))
+
+        return group
 
     def validate(self, doc):
         doc['name'] = doc['name'].strip()
@@ -143,28 +151,12 @@ class Group(AccessControlledModel):
         :param group: The group document to delete.
         :type group: dict
         """
-
         # Remove references to this group from user group membership lists
         self.model('user').update({
             'groups': group['_id']
         }, {
             '$pull': {'groups': group['_id']}
         })
-
-        acQuery = {
-            'access.groups.id': group['_id']
-        }
-        acUpdate = {
-            '$pull': {
-                'access.groups': {'id': group['_id']}
-            }
-        }
-
-        # Remove references to this group from access-controlled collections.
-        self.update(acQuery, acUpdate)
-        self.model('collection').update(acQuery, acUpdate)
-        self.model('folder').update(acQuery, acUpdate)
-        self.model('user').update(acQuery, acUpdate)
 
         # Finally, delete the document itself
         AccessControlledModel.remove(self, group)
@@ -333,21 +325,29 @@ class Group(AccessControlledModel):
         group = {
             'name': name,
             'description': description,
+            'creatorId': creator['_id'],
             'created': now,
             'updated': now,
             'requests': []
         }
 
-        self.setPublic(group, public=public)
+        self.setPublic(group, public, save=False)
 
-        # Now validate and save the group
-        self.save(group)
+        return self.save(group)
 
-        # We make the creator a member of this group and also grant them
-        # admin access over the group.
+    def _grantCreatorAccess(self, event):
+        """
+        This callback makes the group creator an administrator member of the
+        group.
+
+        This generally should not be called or overridden directly, but it may
+        be unregistered from the `model.group.save.created` event.
+        """
+        group = event.info
+        creator = self.model('user').load(group['creatorId'], force=True,
+                                          exc=True)
+
         self.addUser(group, creator, level=AccessType.ADMIN)
-
-        return group
 
     def updateGroup(self, group):
         """

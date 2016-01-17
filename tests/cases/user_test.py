@@ -18,6 +18,7 @@
 ###############################################################################
 
 import cherrypy
+import collections
 import datetime
 import re
 import six
@@ -25,7 +26,7 @@ import six
 from .. import base
 
 from girder import events
-from girder.constants import AccessType, SettingKey
+from girder.constants import AccessType, SettingKey, TokenScope
 
 
 def setUpModule():
@@ -529,10 +530,22 @@ class UserTestCase(base.TestCase):
         self.assertEqual(resp.json['message'], "Parameter 'token' is required.")
         resp = self.request(path=path, method='GET',
                             params={'token': 'not valid'})
-        self.assertStatus(resp, 403)
+        self.assertStatus(resp, 400)
         resp = self.request(path=path, method='GET', params={'token': tokenId})
         self.assertStatusOk(resp)
         user = resp.json['user']
+
+        # We should have a real auth token now
+        self.assertTrue('girderToken' in resp.cookie)
+        authToken = resp.cookie['girderToken'].value
+        token = self.model('token').load(authToken, force=True, objectId=False)
+        self.assertEqual(str(token['userId']), userId)
+        self.assertFalse(self.model('token').hasScope(token, [
+            TokenScope.TEMPORARY_USER_AUTH
+        ]))
+        self.assertTrue(self.model('token').hasScope(token, [
+            TokenScope.USER_AUTH
+        ]))
 
         # Artificially adjust the token to have expired.
         token = self.model('token').load(tokenId, force=True, objectId=False)
@@ -540,7 +553,7 @@ class UserTestCase(base.TestCase):
                             datetime.timedelta(days=1))
         self.model('token').save(token)
         resp = self.request(path=path, method='GET', params={'token': tokenId})
-        self.assertStatus(resp, 403)
+        self.assertStatus(resp, 401)
 
         # We should now be able to change the password
         resp = self.request(path='/user/password', method='PUT', params={
@@ -549,17 +562,9 @@ class UserTestCase(base.TestCase):
         }, user=user)
         self.assertStatusOk(resp)
 
-        # Generate an email with a forwarded header
-        self.assertTrue(base.mockSmtp.isMailQueueEmpty())
-        resp = self.request(
-            path='/user/password/temporary', method='PUT',
-            params={'email': 'user@user.com'},
-            additionalHeaders=[('X-Forwarded-Host', 'anotherhost')])
-        self.assertStatusOk(resp)
-        self.assertEqual(resp.json['message'], "Sent temporary access email.")
-        self.assertTrue(base.mockSmtp.waitForMail())
-        msg = base.mockSmtp.getMail()
-        self.assertTrue('anotherhost' in msg)
+        # The token should have been deleted
+        token = self.model('token').load(tokenId, force=True, objectId=False)
+        self.assertEqual(token, None)
 
     def testUserCreation(self):
         admin = self.model('user').createUser(
@@ -613,6 +618,31 @@ class UserTestCase(base.TestCase):
         self.assertStatusOk(resp)
         self.assertTrue(resp.json['admin'])
 
+    def testDefaultUserFolders(self):
+        self.model('setting').set(SettingKey.USER_DEFAULT_FOLDERS,
+                                  'public_private')
+        user1 = self.model('user').createUser(
+            'folderuser1', 'passwd', 'tst', 'usr', 'folderuser1@user.com')
+        user1_folders = self.model('folder').find({
+            'parentId': user1['_id'],
+            'parentCollection': 'user'})
+        self.assertSetEqual(
+            set(folder['name'] for folder in user1_folders),
+            {'Public', 'Private'}
+        )
+
+        self.model('setting').set(SettingKey.USER_DEFAULT_FOLDERS,
+                                  'none')
+        user2 = self.model('user').createUser(
+            'folderuser2', 'mypass', 'First', 'Last', 'folderuser2@user.com')
+        user2_folders = self.model('folder').find({
+            'parentId': user2['_id'],
+            'parentCollection': 'user'})
+        self.assertSetEqual(
+            set(folder['name'] for folder in user2_folders),
+            set()
+        )
+
     def testAdminFlag(self):
         admin = self.model('user').createUser(
             'user1', 'passwd', 'tst', 'usr', 'user@user.com')
@@ -637,33 +667,35 @@ class UserTestCase(base.TestCase):
         """
         This tests the general correctness of the model save hooks
         """
-        self.ctr = 0
-
         def preSave(event):
-            if '_id' not in event.info:
-                self.ctr += 1
+            count['pre'] += 1
+
+        def createdSave(event):
+            count['created'] += 1
 
         def postSave(event):
-            self.ctr += 2
+            count['post'] += 1
 
-        events.bind('model.user.save', 'test', preSave)
+        count = collections.defaultdict(int)
+        with events.bound('model.user.save.created', 'test', createdSave):
+            user = self.model('user').createUser(
+                login='myuser', password='passwd', firstName='A', lastName='A',
+                email='email@email.com')
+            self.assertEqual(count['created'], 1)
 
-        user = self.model('user').createUser(
-            login='myuser', password='passwd', firstName='A', lastName='A',
-            email='email@email.com')
-        self.assertEqual(self.ctr, 1)
+            count = collections.defaultdict(int)
+            with events.bound('model.user.save', 'test', preSave), \
+                    events.bound('model.user.save.after', 'test', postSave):
+                user = self.model('user').save(user, triggerEvents=False)
+                self.assertEqual(count['pre'], 0)
+                self.assertEqual(count['created'], 0)
+                self.assertEqual(count['post'], 0)
 
-        events.bind('model.user.save.after', 'test', postSave)
-        self.ctr = 0
-
-        user = self.model('user').save(user, triggerEvents=False)
-        self.assertEqual(self.ctr, 0)
-
-        self.model('user').save(user)
-        self.assertEqual(self.ctr, 2)
-
-        events.unbind('model.user.save', 'test')
-        events.unbind('model.user.save.after', 'test')
+                count = collections.defaultdict(int)
+                self.model('user').save(user)
+                self.assertEqual(count['pre'], 1)
+                self.assertEqual(count['created'], 0)
+                self.assertEqual(count['post'], 1)
 
     def testPrivateUser(self):
         """

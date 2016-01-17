@@ -5,8 +5,17 @@ set(JS_COVERAGE_MINIMUM_PASS 75)
 python_tests_init()
 javascript_tests_init()
 
+add_javascript_style_test(
+  grunt_main "${PROJECT_SOURCE_DIR}/Gruntfile.js"
+  JSHINT_EXTRA_CONFIGS "${PROJECT_SOURCE_DIR}/grunt_tasks/.jshintrc"
+)
+add_javascript_style_test(
+  grunt_modules "${PROJECT_SOURCE_DIR}/grunt_tasks"
+  JSHINT_EXTRA_CONFIGS "${PROJECT_SOURCE_DIR}/grunt_tasks/.jshintrc"
+)
 add_python_style_test(python_static_analysis_core "${PROJECT_SOURCE_DIR}/girder")
 add_python_style_test(python_static_analysis_core_tests "${PROJECT_SOURCE_DIR}/tests")
+add_python_style_test(python_static_analysis_ansible_client_tests "${PROJECT_SOURCE_DIR}/clients/ansible")
 
 # These are performed approximately in the order listed.  upload is slower, so
 # start it first, so that if we have parallelism it doesn't hold things up much
@@ -18,12 +27,12 @@ add_python_test(collection)
 add_python_test(custom_root)
 add_python_test(events)
 add_python_test(file)
-add_python_test(filter)
 add_python_test(folder)
 add_python_test(group)
 add_python_test(install)
 add_python_test(item)
 add_python_test(mail)
+add_python_test(model)
 add_python_test(notification TIMEOUT 50)
 add_python_test(plugin_utilities)
 add_python_test(resource)
@@ -55,6 +64,7 @@ add_web_client_test(routing "${PROJECT_SOURCE_DIR}/clients/web/test/spec/routing
 add_web_client_test(version "${PROJECT_SOURCE_DIR}/clients/web/test/spec/versionSpec.js")
 add_web_client_test(custom_widgets "${PROJECT_SOURCE_DIR}/clients/web/test/spec/customWidgetsSpec.js")
 add_web_client_test(widgets "${PROJECT_SOURCE_DIR}/clients/web/test/spec/widgetsSpec.js")
+add_web_client_test(datetime_widget "${PROJECT_SOURCE_DIR}/clients/web/test/spec/dateTimeWidgetSpec.js")
 add_web_client_test(empty_layout "${PROJECT_SOURCE_DIR}/clients/web/test/spec/emptyLayoutSpec.js")
 add_web_client_test(swagger "${PROJECT_SOURCE_DIR}/clients/web/test/spec/swaggerSpec.js" BASEURL "/api/v1" NOCOVERAGE)
 

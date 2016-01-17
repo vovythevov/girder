@@ -54,9 +54,17 @@ class Folder(AccessControlledModel):
             'size', 'meta', 'parentId', 'parentCollection', 'creatorId',
             'baseParentType', 'baseParentId'))
 
-    def filter(self, folder, user):
-        """Preserved override for kwarg backwards compatibility."""
-        return AccessControlledModel.filter(self, doc=folder, user=user)
+    def filter(self, *args, **kwargs):
+        """
+        Preserved override for kwarg backwards compatibility. Prior to the
+        refactor for centralizing model filtering, this method's first formal
+        parameter was called "folder", whereas the centralized version's first
+        parameter is called "doc". This override simply detects someone using
+        the old kwarg and converts it to the new form.
+        """
+        if 'folder' in kwargs:
+            args = [kwargs.pop('folder')] + list(args)
+        return super(Folder, self).filter(*args, **kwargs)
 
     def validate(self, doc, allowRename=False):
         """
@@ -163,7 +171,7 @@ class Folder(AccessControlledModel):
     def setMetadata(self, folder, metadata):
         """
         Set metadata on a folder.  A rest exception is thrown in the cases
-        where the metadata json object is badly formed, or if any of the
+        where the metadata JSON object is badly formed, or if any of the
         metadata keys contains a period ('.').
 
         :param folder: The folder to set the metadata on.
@@ -284,9 +292,10 @@ class Folder(AccessControlledModel):
 
         return self.save(folder)
 
-    def remove(self, folder, progress=None, **kwargs):
+    def clean(self, folder, progress=None, **kwargs):
         """
-        Delete a folder recursively.
+        Delete all contents underneath a folder recursively, but leave the
+        folder itself.
 
         :param folder: The folder document to delete.
         :type folder: dict
@@ -302,7 +311,7 @@ class Folder(AccessControlledModel):
             setResponseTimeLimit()
             self.model('item').remove(item, progress=progress, **kwargs)
             if progress:
-                progress.update(increment=1, message='Deleted item ' +
+                progress.update(increment=1, message='Deleted item %s' %
                                 item['name'])
         # subsequent operations take a long time, so free the cursor's resources
         items.close()
@@ -316,6 +325,18 @@ class Folder(AccessControlledModel):
             self.remove(subfolder, progress=progress, **kwargs)
         folders.close()
 
+    def remove(self, folder, progress=None, **kwargs):
+        """
+        Delete a folder recursively.
+
+        :param folder: The folder document to delete.
+        :type folder: dict
+        :param progress: A progress context to record progress on.
+        :type progress: girder.utility.progress.ProgressContext or None.
+        """
+        # Remove the contents underneath this folder recursively.
+        self.clean(folder, progress, **kwargs)
+
         # Delete pending uploads into this folder
         uploads = self.model('upload').find({
             'parentId': folder['_id'],
@@ -328,7 +349,7 @@ class Folder(AccessControlledModel):
         # Delete this folder
         AccessControlledModel.remove(self, folder, progress=progress, **kwargs)
         if progress:
-            progress.update(increment=1, message='Deleted folder ' +
+            progress.update(increment=1, message='Deleted folder %s' %
                             folder['name'])
 
     def childItems(self, folder, limit=0, offset=0, sort=None, filters=None,
@@ -469,14 +490,15 @@ class Folder(AccessControlledModel):
         }
 
         if parentType in ('folder', 'collection'):
-            self.copyAccessPolicies(src=parent, dest=folder)
+            self.copyAccessPolicies(src=parent, dest=folder, save=False)
 
         if creator is not None:
-            self.setUserAccess(folder, user=creator, level=AccessType.ADMIN)
+            self.setUserAccess(folder, user=creator, level=AccessType.ADMIN,
+                               save=False)
 
         # Allow explicit public flag override if it's set.
         if public is not None and type(public) is bool:
-            self.setPublic(folder, public=public)
+            self.setPublic(folder, public, save=False)
 
         if allowRename:
             self.validate(folder, allowRename=True)
@@ -568,7 +590,7 @@ class Folder(AccessControlledModel):
             return folders.count()
         else:
             return sum(1 for _ in self.filterResultsByPermission(
-                cursor=folders, user=user, level=level, limit=None))
+                cursor=folders, user=user, level=level))
 
     def subtreeCount(self, folder, includeItems=True, user=None, level=None):
         """
@@ -596,7 +618,7 @@ class Folder(AccessControlledModel):
 
         if level is not None:
             folders = self.filterResultsByPermission(
-                cursor=folders, user=user, level=level, limit=None)
+                cursor=folders, user=user, level=level)
 
         count += sum(self.subtreeCount(subfolder, includeItems=includeItems,
                                        user=user, level=level)
@@ -614,7 +636,7 @@ class Folder(AccessControlledModel):
         :param path: A path prefix to add to the results.
         :type path: str
         :param includeMetadata: if True and there is any metadata, include a
-                                result which is the json string of the
+                                result which is the JSON string of the
                                 metadata.  This is given a name of
                                 metadata[-(number).json that is distinct from
                                 any file within the folder.
@@ -790,7 +812,7 @@ class Folder(AccessControlledModel):
             })
 
             subfolders = self.filterResultsByPermission(
-                cursor=cursor, user=user, level=AccessType.ADMIN, limit=None)
+                cursor=cursor, user=user, level=AccessType.ADMIN)
 
             for folder in subfolders:
                 self.setAccessList(

@@ -20,7 +20,6 @@
 import errno
 import getpass
 import glob
-import hashlib
 import json
 import os
 import re
@@ -70,12 +69,12 @@ class HttpError(Exception):
 
 class GirderClient(object):
     """
-    A class for interacting with the girder restful api.
+    A class for interacting with the Girder RESTful API.
     Some simple examples of how to use this class follow:
 
     .. code-block:: python
 
-        client = GirderClient('myhost', 8080)
+        client = GirderClient(apiUrl='http://myhost:8080')
         client.authenticate('myname', 'mypass')
 
         folder_id = '53b714308926486402ac5aba'
@@ -103,12 +102,17 @@ class GirderClient(object):
     MAX_CHUNK_SIZE = 1024 * 1024 * 64
 
     def __init__(self, host=None, port=None, apiRoot=None, scheme=None,
-                 dryrun=False, blacklist=None):
+                 dryrun=False, blacklist=None, apiUrl=None):
         """
         Construct a new GirderClient object, given a host name and port number,
         as well as a username and password which will be used in all requests
-        (HTTP Basic Auth).
+        (HTTP Basic Auth). You can pass the URL in parts with the `host`,
+        `port`, `scheme`, and `apiRoot` kwargs, or simply pass it in all as
+        one URL with the `apiUrl` kwarg instead. If you pass `apiUrl`, the
+        individual part kwargs will be ignored.
 
+        :param apiUrl: The full path to the REST API of a Girder instance, e.g.
+            `http://my.girder.com/api/v1`.
         :param host: A string containing the host name where Girder is running,
             the default value is 'localhost'
         :param port: The port number on which to connect to Girder,
@@ -119,21 +123,18 @@ class GirderClient(object):
             the default value is 'http'; if you pass 'https' you likely want
             to pass 443 for the port
         """
-        if apiRoot is None:
-            apiRoot = '/api/v1'
+        if apiUrl is None:
+            if apiRoot is None:
+                apiRoot = '/api/v1'
 
-        if port is None:
-            if scheme == 'https':
-                port = 443
-            else:
-                port = 80
+            self.scheme = scheme or 'http'
+            self.host = host or 'localhost'
+            self.port = port or (443 if scheme == 'https' else 80)
 
-        self.scheme = scheme or 'http'
-        self.host = host or 'localhost'
-        self.port = port
-
-        self.urlBase = self.scheme + '://' + self.host + ':' + str(self.port) \
-            + apiRoot
+            self.urlBase = '%s://%s:%s%s' % (
+                self.scheme, self.host, str(self.port), apiRoot)
+        else:
+            self.urlBase = apiUrl
 
         if self.urlBase[-1] != '/':
             self.urlBase += '/'
@@ -217,7 +218,7 @@ class GirderClient(object):
         })
 
         # If success, return the json object. Otherwise throw an exception.
-        if result.status_code == 200:
+        if result.status_code in [200, 201]:
             return result.json()
         # TODO handle 300-level status (follow redirect?)
         else:
@@ -228,8 +229,9 @@ class GirderClient(object):
     def get(self, path, parameters=None):
         return self.sendRestRequest('GET', path, parameters)
 
-    def post(self, path, parameters=None, files=None):
-        return self.sendRestRequest('POST', path, parameters, files=files)
+    def post(self, path, parameters=None, files=None, data=None):
+        return self.sendRestRequest('POST', path, parameters, files=files,
+                                    data=data)
 
     def put(self, path, parameters=None, data=None):
         return self.sendRestRequest('PUT', path, parameters, data=data)
@@ -302,7 +304,7 @@ class GirderClient(object):
 
     def createFolder(self, parentId, name, description='', parentType='folder'):
         """
-        Creates and returns an folder
+        Creates and returns a folder
 
         :param parentType: One of ('folder', 'user', 'collection')
         """
@@ -384,26 +386,14 @@ class GirderClient(object):
                 next_chunk_size = min(self.MAX_CHUNK_SIZE,
                                       filesize - startbyte)
 
-    def _sha512_hasher(self, filepath):
-        """
-        Returns sha512 hash of passed in file.
-
-        :param filepath: path to file on disk.
-        """
-        hasher = hashlib.sha512()
-        for chunk, _ in self._file_chunker(filepath):
-            hasher.update(chunk)
-        return hasher.hexdigest()
-
     def isFileCurrent(self, itemId, filename, filepath):
         """
         Tests whether the passed in filepath exists in the item with itemId,
-        with a name of filename, and with the same contents as the file at
-        filepath.  Returns a tuple (file_id, current) where
-        file_id = id of the file with that filename under the item, or
-        None if no such file exists under the item.
+        with a name of filename, and with the same length.  Returns a tuple
+        (file_id, current) where file_id = id of the file with that filename
+        under the item, or None if no such file exists under the item.
         current = boolean if the file with that filename under the item
-        has the same contents as the file at filepath.
+        has the same size as the file at filepath.
 
         :param itemId: ID of parent item for file.
         :param filename: name of file to look for under the parent item.
@@ -414,15 +404,8 @@ class GirderClient(object):
         for item_file in item_files:
             if filename == item_file['name']:
                 file_id = item_file['_id']
-                if 'sha512' in item_file:
-                    if item_file['sha512'] == self._sha512_hasher(filepath):
-                        return (file_id, True)
-                    else:
-                        return (file_id, False)
-                else:
-                    # Some assetstores don't support sha512
-                    # so we'll need to upload anyway
-                    return (file_id, False)
+                size = os.path.getsize(filepath)
+                return (file_id, size == item_file['size'])
         # Some files may already be stored under a different name, we'll need
         # to upload anyway in this case also.
         return (None, False)
@@ -430,7 +413,7 @@ class GirderClient(object):
     def uploadFileToItem(self, itemId, filepath):
         """
         Uploads a file to an item, in chunks.
-        If ((the file already exists in the item with the same name and sha512)
+        If ((the file already exists in the item with the same name and size)
         or (if the file has 0 bytes), no uploading will be performed.
 
         :param itemId: ID of parent item for file.
@@ -443,7 +426,7 @@ class GirderClient(object):
         if filesize == 0:
             return
 
-        # Check if the file already exists by name and sha512 in the file.
+        # Check if the file already exists by name and size in the file.
         file_id, current = self.isFileCurrent(itemId, filename, filepath)
         if file_id is not None and current:
             print('File %s already exists in parent Item' % filename)
@@ -751,7 +734,7 @@ class GirderClient(object):
         Callback functions will be called after a folder in Girder is created
         and all subfolders and items for that folder have completed uploading.
         Callback functions should take two parameters:
-        - the folder in girder
+        - the folder in Girder
         - the full path to the local folder
 
         :param callback: callback function to be called.
@@ -766,7 +749,7 @@ class GirderClient(object):
         Callback functions will be called after an item in Girder is created
         and all files for that item have been uploaded.  Callback functions
         should take two parameters:
-        - the item in girder
+        - the item in Girder
         - the full path to the local folder or file comprising the item
 
         :param callback: callback function to be called.
@@ -951,7 +934,7 @@ class GirderClient(object):
 
         :param file_pattern: a glob pattern for files that will be uploaded,
             recursively copying any file folder structures.
-        :param parent_id: id of the parent in girder.
+        :param parent_id: id of the parent in Girder.
         :param parent_type: one of (collection,folder,user), default of folder.
         :param leaf_folders_as_items: bool whether leaf folders should have all
             files uploaded as single items.

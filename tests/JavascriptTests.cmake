@@ -76,18 +76,25 @@ function(add_javascript_style_test name input)
   endif()
   if(NOT EXISTS ${input})
     message(FATAL_ERROR "Failed to add javascript style tests."
-                        "Directory '${input}' does not exist.")
+                        "Directory or file '${input}' does not exist.")
+  endif()
+
+  # check if the input is a directory or file and set the working directory
+  if(IS_DIRECTORY "${input}")
+    set(test_directory "${input}")
+  else()
+    get_filename_component(test_directory "${input}" DIRECTORY)
   endif()
 
   add_test(
     NAME "jshint_${name}"
-    WORKING_DIRECTORY ${input}
+    WORKING_DIRECTORY "${test_directory}"
     COMMAND "${JSHINT_EXECUTABLE}" --config "${jshint_config}" "${input}"
   )
   add_test(
     NAME "jsstyle_${name}"
-    WORKING_DIRECTORY ${input}
-    COMMAND "${JSSTYLE_EXECUTABLE}" --config "${jsstyle_config}" "${input}"
+    WORKING_DIRECTORY "${test_directory}"
+    COMMAND "${JSSTYLE_EXECUTABLE}"  --config "${jsstyle_config}" "${input}"
   )
 endfunction()
 
@@ -168,7 +175,7 @@ function(add_web_client_test case specFile)
     "ENABLED_PLUGINS=${plugins}"
     "PLUGIN_DIRS=${pluginDirs}"
     "GIRDER_TEST_DB=mongodb://localhost:27017/girder_test_${testname}"
-    "GIRDER_TEST_ASSETSTORE=webclient_${testname}"
+    "GIRDER_TEST_ASSETSTORE=${testname}"
     "GIRDER_PORT=${web_client_port}"
   )
   math(EXPR next_web_client_port "${web_client_port} + 1")

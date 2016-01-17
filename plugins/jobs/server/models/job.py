@@ -18,12 +18,11 @@
 ###############################################################################
 
 import datetime
-import pymongo
 import six
 from bson import json_util
 
 from girder import events
-from girder.constants import AccessType
+from girder.constants import AccessType, SortDir
 from girder.models.model_base import AccessControlledModel, ValidationException
 from girder.plugins.jobs.constants import JobStatus, JOB_HANDLER_LOCAL
 
@@ -32,17 +31,23 @@ class Job(AccessControlledModel):
     def initialize(self):
         self.name = 'job'
         compoundSearchIndex = (
-            ('userId', pymongo.ASCENDING),
-            ('created', pymongo.DESCENDING)
+            ('userId', SortDir.ASCENDING),
+            ('created', SortDir.DESCENDING)
         )
         self.ensureIndices([(compoundSearchIndex, {})])
 
-    def validate(self, job):
-        job['status'] = int(job['status'])
+        self.exposeFields(level=AccessType.READ, fields={
+            'title', 'type', 'created', 'interval', 'when', 'status',
+            'progress', 'log', 'meta', '_id', 'public', 'async', 'updated',
+            'timestamps'})
 
+        self.exposeFields(level=AccessType.SITE_ADMIN, fields={
+            'args', 'kwargs'})
+
+    def validate(self, job):
         if not JobStatus.isValid(job['status']):
-            raise ValidationException('Invalid job status {}.'.format(
-                                      job.get['status']), field='status')
+            raise ValidationException(
+                'Invalid job status %s.' % job['status'], field='status')
 
         return job
 
@@ -164,7 +169,8 @@ class Job(AccessControlledModel):
             'log': '',
             'meta': {},
             'handler': handler,
-            'async': async
+            'async': async,
+            'timestamps': []
         }
 
         self.setPublic(job, public=public)
@@ -242,6 +248,7 @@ class Job(AccessControlledModel):
         :param progressTotal: Max progress value for this job.
         """
         changed = False
+        now = datetime.datetime.utcnow()
 
         if log is not None:
             changed = True
@@ -250,16 +257,23 @@ class Job(AccessControlledModel):
             else:
                 job['log'] += log
         if status is not None:
-            changed = True
-            job['status'] = status
+            status = int(status)
 
-            if notify and job['userId']:
-                user = self.model('user').load(job['userId'], force=True)
-                expires = (datetime.datetime.utcnow() +
-                           datetime.timedelta(seconds=30))
-                self.model('notification').createNotification(
-                    type='job_status', data=self.filter(job, user), user=user,
-                    expires=expires)
+            if status != job['status']:
+                changed = True
+                job['status'] = status
+                job['timestamps'] = job.get('timestamps', [])
+                job['timestamps'].append({
+                    'status': status,
+                    'time': now
+                })
+
+                if notify and job['userId']:
+                    user = self.model('user').load(job['userId'], force=True)
+                    expires = now + datetime.timedelta(seconds=30)
+                    self.model('notification').createNotification(
+                        type='job_status', data=self.filter(job, user),
+                        user=user, expires=expires)
         if (progressMessage is not None or progressCurrent is not None or
                 progressTotal is not None):
             changed = True
@@ -267,7 +281,7 @@ class Job(AccessControlledModel):
                                     progressMessage, notify)
 
         if changed:
-            job['updated'] = datetime.datetime.utcnow()
+            job['updated'] = now
             job = self.save(job)
 
         return job
@@ -326,28 +340,49 @@ class Job(AccessControlledModel):
             user, job['title'], total, state=state, current=current,
             message=message, estimateTime=False)
 
-    def filter(self, job, user):
+    def filter(self, *args, **kwargs):
+        """
+        This predates the core generic model filtering utilities, so it does
+        a bunch of stuff that is not best practice but is preserved here for
+        backward compatibility. The ``jobs.filter`` event is now deprecated
+        and will be removed in the next major release in favor of the normal
+        ``exposeFields`` et al.
+        """
+        if 'job' in kwargs:
+            args = [kwargs.pop('folder')] + list(args)
+
+        job = args[0]
+
+        if 'user' in kwargs:
+            user = kwargs.pop('user')
+        else:
+            user = args[1]
+
         # Allow downstreams to filter job info as they see fit
         event = events.trigger('jobs.filter', info={
             'job': job,
             'user': user
         })
 
-        keys = ['title', 'type', 'created', 'interval', 'when', 'status',
-                'progress', 'log', 'meta', '_id', 'public', 'async', 'updated']
+        keys = []
 
-        if user and user['admin'] is True:
-            keys.extend(('args', 'kwargs'))
+        if 'additionalKeys' in kwargs:
+            keys.extend(kwargs.pop('additionalKeys'))
 
+        removeFields = set()
         for resp in event.responses:
             if 'exposeFields' in resp:
                 keys.extend(resp['exposeFields'])
             if 'removeFields' in resp:
-                keys = [k for k in keys if k not in resp['removeFields']]
+                removeFields |= set(resp['removeFields'])
 
-        doc = self.filterDocument(job, allow=keys)
+        doc = super(Job, self).filter(job, user, additionalKeys=keys, **kwargs)
 
         if 'kwargs' in doc and isinstance(doc['kwargs'], six.string_types):
             doc['kwargs'] = json_util.loads(doc['kwargs'])
+
+        for field in removeFields:
+            if field in doc:
+                del doc[field]
 
         return doc

@@ -165,7 +165,7 @@ class QuotaPolicy(Resource):
         Validate a policy JSON object.  Only a limited set of keys is
         supported, and each of them has a restricted data type.
 
-        :param policy: json object to validate.  This may also be a python
+        :param policy: JSON object to validate.  This may also be a Python
                            dictionary as if the JSON was already decoded.
         :returns: a validate policy dictionary.
         """
@@ -335,7 +335,7 @@ class QuotaPolicy(Resource):
         if assetstore is False:
             raise GirderException('Required assetstore is unavailable')
         if assetstore:
-            event.info['assetstore'] = assetstore
+            event.addResponse(assetstore)
 
     def _getFileSizeQuota(self, model, resource):
         """
@@ -358,7 +358,7 @@ class QuotaPolicy(Resource):
                 key = None
             if key:
                 quota = self.model('setting').get(key, None)
-        if not quota or quota < 0 or not isinstance(quota, int):
+        if not quota or quota < 0 or not isinstance(quota, six.integer_types):
             return None
         return quota
 
