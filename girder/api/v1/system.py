@@ -195,7 +195,7 @@ class System(Resource):
         .param('key', 'The key identifying the setting to unset.')
         .errorResponse('You are not a system administrator.', 403))
 
-    @access.admin(scope=TokenScope.PARTIAL_UPLOAD_CLEAN)
+    @access.admin(scope=TokenScope.PARTIAL_UPLOAD_READ)
     def getPartialUploads(self, params):
         limit, offset, sort = self.getPagingParameters(params, 'updated')
         uploadList = list(self.model('upload').list(
