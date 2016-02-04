@@ -11,6 +11,12 @@ else()
   set(_py_branch_cov False)
 endif()
 
+if(RUN_CORE_TESTS)
+  set(_omit_python_covg "girder/external/*")
+else()
+  set(_omit_python_covg "girder/*,clients/python/*")
+endif()
+
 configure_file(
   "${PROJECT_SOURCE_DIR}/tests/girder.coveragerc.in"
   "${py_coverage_rc}"
@@ -95,7 +101,7 @@ function(add_python_test case)
     add_test(
       NAME ${name}
       WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
-      COMMAND "${PYTHON_COVERAGE_EXECUTABLE}" run -p --append "--rcfile=${py_coverage_rc}"
+      COMMAND "${PYTHON_COVERAGE_EXECUTABLE}" run --parallel-mode "--rcfile=${py_coverage_rc}"
               "--source=girder,${PROJECT_SOURCE_DIR}/clients/python/girder_client${other_covg}"
               -m unittest -v ${module}
     )

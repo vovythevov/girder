@@ -44,7 +44,7 @@ girder.views.PluginsView = girder.View.extend({
                 info.configRoute = girder.getPluginConfigRoute(name);
             }
 
-            info.meetsDependencies = this._meetsDependencies(info);
+            info.unmetDependencies = this._unmetDependencies(info);
         }, this);
 
         this.$el.html(girder.templates.plugins({
@@ -56,19 +56,19 @@ girder.views.PluginsView = girder.View.extend({
             offText: '&nbsp;'
         }).off('switchChange.bootstrapSwitch')
           .on('switchChange.bootstrapSwitch', function (event, state) {
-                var plugin = $(event.currentTarget).attr('key');
-                if (state === true) {
-                    view.enabled.push(plugin);
-                } else {
-                    var idx;
-                    while ((idx = view.enabled.indexOf(plugin)) >= 0) {
-                        view.enabled.splice(idx, 1);
-                    }
-                }
-                girder.pluginsChanged = true;
-                $('.g-plugin-restart').addClass('g-plugin-restart-show');
-                view._updatePlugins();
-            });
+              var plugin = $(event.currentTarget).attr('key');
+              if (state === true) {
+                  view.enabled.push(plugin);
+              } else {
+                  var idx;
+                  while ((idx = view.enabled.indexOf(plugin)) >= 0) {
+                      view.enabled.splice(idx, 1);
+                  }
+              }
+              girder.pluginsChanged = true;
+              $('.g-plugin-restart').addClass('g-plugin-restart-show');
+              view._updatePlugins();
+          });
         this.$('.g-plugin-config-link').tooltip({
             container: this.$el,
             animation: false,
@@ -88,13 +88,17 @@ girder.views.PluginsView = girder.View.extend({
     },
 
     /**
-     * Takes a plugin object and recursively determines if it fulfills
-     * dependencies. Meaning, its dependencies exist in this.allPlugins.
+     * Takes a plugin object and determines if it has any top level
+     * unmet dependencies.
+     *
+     * Given A depends on B, and B depends on C, and C is not present:
+     * A will have unmet dependencies of ['B'], and B will have unmet dependencies
+     * of ['C'].
      **/
-    _meetsDependencies: function (plugin) {
-        return _.every(plugin.dependencies, function (pluginName) {
+    _unmetDependencies: function (plugin) {
+        return _.reject(plugin.dependencies, function (pluginName) {
             return _.has(this.allPlugins, pluginName) &&
-                this._meetsDependencies(this.allPlugins[pluginName]);
+                _.isEmpty(this._unmetDependencies(this.allPlugins[pluginName]));
         }, this);
     },
 
@@ -129,9 +133,7 @@ girder.views.PluginsView = girder.View.extend({
                 this.$('.g-plugin-switch[key="' + plugin + '"]')
                     .attr('checked', 'checked').bootstrapSwitch('state', true, true);
             }, this);
-        }, this)).error(_.bind(function () {
-            // TODO acknowledge?
-        }, this));
+        }, this));  // TODO acknowledge?
     }
 });
 

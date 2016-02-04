@@ -437,6 +437,49 @@ that can be used to import content:
   plugin that doesn't fall into one of the above categories can be placed here,
   such as static images, fonts, or third-party static libraries.
 
+Linting and Style Checking Client-Side Code
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Girder uses `ESLint <http://eslint.org/>`_ to perform static analysis of its
+own JavaScript files.  Developers can easily add the same static analysis
+tests to their own plugins using a CMake function call defined by Girder.
+
+.. code-block:: cmake
+
+    add_eslint_test(
+        js_static_analysis_cats "${PROJECT_SOURCE_DIR}/plugins/cats/web_client"
+    )
+
+This will check all files with the extension **.js** inside of the ``cats`` plugin's
+``web_client`` directory using the same style rules enforced within Girder itself.
+Plugin developers can also choose to extend or even override entirely the core style
+rules.  To do this, you only need to provide a path to a custom ESLint configuration
+file as follows.
+
+.. code-block:: cmake
+
+    add_eslint_test(
+        js_static_analysis_cats "${PROJECT_SOURCE_DIR}/plugins/cats/web_client"
+        ESLINT_CONFIG_FILE "${PROJECT_SOURCE_DIR}/plugins/cats/.eslintrc"
+    )
+
+You can `configure ESLint <http://eslint.org/docs/user-guide/configuring.html>`_
+inside this file however you choose.  For example, to extend Girder's own
+configuration by adding a new global variable ``cats`` and you really hate using
+semicolons, you can put the following in your **.eslintrc**
+
+.. code-block:: javascript
+
+    {
+        "extends": "../../.eslintrc",
+        "globals": {
+            "cats": true
+        },
+        "rules": {
+            "semi": 0
+        }
+    }
+
 Installing custom dependencies from npm
 ***************************************
 
@@ -490,7 +533,8 @@ key to your **plugin.json** file.
     "grunt":
         {
         "file" : "Gruntfile.js",
-        "defaultTargets": [ "MY_PLUGIN_TASK" ]
+        "defaultTargets": [ "MY_PLUGIN_TASK" ],
+        "autobuild": true
         }
     }
 
@@ -500,6 +544,11 @@ and add any target to the default one using the "defaultTargets" array.
 .. note:: The **file** key within the **grunt** object must be a path that is
    relative to the root directory of your plugin. It does not have to be called
    ``Gruntfile.js``, it can be called anything you want.
+
+.. note:: Girder creates a number of grunt build tasks that expect plugins to be
+   organized according to a certain convention.  To opt out of these tasks, add
+   an **autobuild** key (default: **true**) within the **grunt** object and set
+   it to **false**.
 
 All paths within your custom Grunt tasks must be relative to the root directory
 of the Girder source repository, rather than relative to the plugin directory.

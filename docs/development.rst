@@ -18,15 +18,6 @@ provide helpful development tools and to allow the test suite to run: ::
 
     pip install -r requirements-dev.txt
 
-.. note:: One of the development indirect requirements, `httpretty`, can fail to
-   install if under certain system locales (see the `error report
-   <https://github.com/gabrielfalcao/HTTPretty/issues/108>`_).  Changing to any
-   UTF8 locale works around this problem.  For instance, on Ubuntu, you can
-   change your system locale using the commands: ::
-
-        locale-gen en_US.UTF-8
-        export LANG=en_US.utf8
-
 During development, once Girder is started via ``python -m girder``, the server
 will reload itself whenever a Python file is modified.
 
@@ -222,6 +213,20 @@ and then run in your build directory ::
     cmake ../girder
 
 before running your tests.
+
+An example of a very simple client side test would be as follows ::
+
+    add_web_client_test(some_client_test "someSpec.js" PLUGIN "my_plugin")
+
+The ``PLUGIN`` argument indicates that "my_plugin" is the owner of ``some_client_test``, at the time of the test my_plugin and all of its dependencies will be loaded.
+
+If additional plugins are needed for a specific test, that can be achieved using the ``ENABLEDPLUGINS`` argument ::
+
+    add_web_client_test(another_client_test "anotherSpec.js" PLUGIN "my_plugin" ENABLEDPLUGINS "my_plugin" "jobs")
+
+Here ``ENABLEDPLUGINS`` ensures that my_plugin *and* the jobs plugin are loaded, along with their dependencies at the time of ``another_client_test``.
+
+.. note:: Core functionality shouldn't depend on plugins being enabled, this test definition is more suitable for a plugin. Information for testing plugins can be found under :doc:`plugin-development`.
 
 You will find many useful methods for client side testing in the ``girderTest`` object
 defined at ``/clients/web/test/testUtils.js``.
