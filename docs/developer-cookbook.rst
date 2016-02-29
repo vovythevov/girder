@@ -438,6 +438,15 @@ by the environment variable ``GIRDER_TEST_DATA_PREFIX`` as follows
     with open(test_file, 'r') as f:
         content = f.read() # The content of the downloaded test file
 
+In plugins, the directory ``plugin_tests/data`` inside your plugin directory can
+be used to store plugin's specific data file. They can then be accessed using
+the following:
+
+.. code-block:: cmake
+
+    # My plugin name is cat
+    add_python_test(cat PLUGIN cat EXTERNAL_DATA "plugins/cat/test_file.txt")
+
 Serving a custom app from the server root
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
